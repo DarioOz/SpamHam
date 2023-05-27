@@ -1,0 +1,317 @@
+---
+title: "Competition: Spam and Ham Classification"
+author: "Dario Samuele Pishvai"
+date: "2023-05-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(readr)
+library(stringr)
+library(DataExplorer)
+library(corrplot)
+library(ggplot2)
+library(ppcor)
+library(MASS)
+library(caret)
+library(tidyverse)
+library(pscl)
+library(stringr)
+library(Hmisc)
+library(tidytext)
+library(textdata)
+library("hunspell")
+library(stringi)
+library(tm)
+library(lsa)
+library(DT)
+library("superml")
+```
+
+&nbsp;
+
+# Introduction to the Dataset
+
+The Dataset is composed by two Variables: "email" and "class":
+
+• "email" that contains the text of the emails
+
+• "class" that assigns to each email a class: "spam" or "ham".
+
+The purpose of this analysis is to find the logistic regression model that best predicts the class of the email. How we can see from the pie plot, the Dataset is unbalanced.
+
+Over the 4457 observations, we know that:
+
+• 3860 observations that are classified as "ham"
+
+• 597 observations that are classified as "spam"
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+train <- read_csv("C:/Users/acer/OneDrive/Desktop/statistical learning/competition/spam_train.csv")
+test <- read_delim("C:/Users/acer/OneDrive/Desktop/statistical learning/competition/spam_test.csv", 
+                        delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+#the column ...1 is the id
+row.names(train)=train$...1
+train<-train[,-1]
+row.names(test)=test$id_number
+test<-test[,-1]
+
+#class as factor
+train$class<-as.factor(train$class)
+
+
+#pieplot on train set
+pie(table(train$class), labels =paste0( round((table(train$class)/length(train$class))*100,2) , "%") ,main = "CLASS",col = rainbow(length(table(train$class))))
+legend("topright", names(table(train$class)), cex = 0.8,
+       fill = rainbow(length(table(train$class))))
+```
+&nbsp;
+
+## Adding Variables
+
+So, in order to better predict the "class" of the email, is possible looking for features that allow as to create and adding new variables, maybe usefull for ours predictive models.
+In my opinion, the best variables, that better help us to predict the class of the emails are:
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+### TRAIN SET
+# Define function to count upper case
+train$upper_count <- str_count(train$email, "[[:upper:]]")
+#Define function to detect the Precense of Keywords
+keyword_present <- grepl("FREE|STOP|URGENT!|won|win|Free|Reply|WIN|WON", train$email)
+train$keyword_present<- factor(keyword_present, levels = c(FALSE, TRUE), labels = c("Absence of Key Words", "Presence of Key Words"))
+#Define a function to measure the average word length
+train$avg_word_length <- sapply(strsplit(train$email, "\\W+"), function(x) mean(nchar(x)))
+# Define function to detect if a number composed by 4 elements occur
+n_digit_in_email <- grepl("[0-9]{4,}", train$email)
+train$n_digit_in_email <- factor(n_digit_in_email, levels = c(FALSE, TRUE), labels = c("Absence of Number composed by 4", "Presence of Number composed by 4"))
+# Define function to detect if a number is contained
+contains_numbers <- grepl("[1234567890]", train$email)
+train$cont_numb <- factor(contains_numbers, levels = c(FALSE, TRUE), labels = c("No numbers", "Contains numbers"))
+# Define function to count frequency of number
+train$numeric_char_count <- str_count(train$email, "[0-9]")
+#Create new variable to measure the number of letters that occurs
+train$letter_count<-str_count(train$email)
+# Define function to count frequency of punctuation
+train$punct_count <- str_count(train$email, "[[:punct:]]")
+#Define function to count frequency of special characters
+train$count_special_char <- str_count(train$email, "[^[:alnum:]\\s]")
+# Define function to count upper words
+train$uppercase_words_count <- str_count(train$email, "\\b[A-Z]+\\b")
+#Define function to detect if special characters occurs
+contains_special <- grepl("[�$°§£€]", train$email)
+train$special_char <- factor(contains_special, levels = c(FALSE, TRUE), labels = c("No special characters", "Contains special characters"))
+
+### TEST SET
+# Define function to count upper case
+test$upper_count <- str_count(test$email, "[[:upper:]]")
+#Define function to detect the Precense of Keywords
+keyword_present <- grepl("FREE|STOP|URGENT!|won|win|Free|Reply|WIN|WON", test$email)
+test$keyword_present<- factor(keyword_present, levels = c(FALSE, TRUE), labels = c("Absence of Key Words", "Presence of Key Words"))
+#Define a function to measure the average word length
+test$avg_word_length <- sapply(strsplit(test$email, "\\W+"), function(x) mean(nchar(x)))
+# Define function to detect if a number composed by 4 elements occur
+n_digit_in_email <- grepl("[0-9]{4,}", test$email)
+test$n_digit_in_email <- factor(n_digit_in_email, levels = c(FALSE, TRUE), labels = c("Absence of Number composed by 4", "Presence of Number composed by 4"))
+# Define function to detect if a number is contained
+contains_numbers <- grepl("[1234567890]", test$email)
+test$cont_numb <- factor(contains_numbers, levels = c(FALSE, TRUE), labels = c("No numbers", "Contains numbers"))
+# Define function to count frequency of number
+test$numeric_char_count <- str_count(test$email, "[0-9]")
+#Create new variable to measure the number of letters that occurs
+test$letter_count<-str_count(test$email)
+# Define function to count frequency of punctuation
+test$punct_count <- str_count(test$email, "[[:punct:]]")
+#Define function to count frequency of special characters
+test$count_special_char <- str_count(test$email, "[^[:alnum:]\\s]")
+# Define function to count upper words
+test$uppercase_words_count <- str_count(test$email, "\\b[A-Z]+\\b")
+#Define function to detect if special characters occurs
+contains_special <- grepl("[�$°§£€]", test$email)
+test$special_char <- factor(contains_special, levels = c(FALSE, TRUE), labels = c("No special characters", "Contains special characters"))
+```
+
+&nbsp;
+
+```{r, echo = FALSE}
+datatable(data.frame(
+  Variable = c("email","class","keyword_present","n_digit_in_email","cont_numb","special_char","upper_count","avg_word_length","numeric_char_count","letter_count","punct_count","count_special_char","uppercase_words_count"), 
+  Class = c("character",rep("factor", 5), rep("numeric",7)), 
+  Description = c("text of the emails", "Variable with two levels: spam and ham", "Variable which detects the precense of Keywords", "Variable that detects if a number composed by 4 elements occur", "Variable that detects if a number is contained in the emails", "Variable that detects if one of this special characters [�$°§£€] occurs", "Variable that counts upper case", "Variable measures the average word length", "Variable that counts the frequency of number for each email", "Variable to measure the number of letters that occurs", "Variable that counts the frequency of punctuation","Variable that counts the frequency of special characters", "Variable that counts the upper words"))
+  )
+
+```
+
+&nbsp;
+
+## Bivariate Analysis
+
+### BoxPlots
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+plot_boxplot(train, by="class")
+```
+&nbsp;
+
+According to those boxplot the most usefull variables for prediction of "class" are:
+
+• "letter_count"
+
+• "numeric_char_count"
+
+• "upper_count"
+
+• "uppercase_word_count"
+
+While, in the other case seems that the medians are similar and there are many overlapping values  between that groups.
+
+&nbsp;
+
+### Class X Keywords Presence
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width = 12, fig.align = "center"}
+ggplot(data=train, aes(x=class, fill=factor(keyword_present)))+
+  geom_bar(position="fill", aes(y = (..count..)/sum(..count..)))+
+  ylab("frequency")+scale_fill_discrete(name="Is higher than median")+
+  xlab("Class")+ylab("proportion")+geom_hline(yintercept=0.5)
+```
+In this case the presence of Key word is more higher in the emails classified as "spam"
+
+&nbsp;
+
+### Class X N Digit in Emails
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width = 12, fig.align = "center"}
+ggplot(data=train, aes(x=class, fill=factor(n_digit_in_email)))+
+  geom_bar(position="fill", aes(y = (..count..)/sum(..count..)))+
+  ylab("frequency")+scale_fill_discrete(name="Is higher than median")+
+  xlab("Class")+ylab("proportion")+geom_hline(yintercept=0.5)
+```
+In this case the presence of number composed by 4 digit  is more higher in the emails classified as "spam"
+
+&nbsp;
+
+### Class X Containing Numbers
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width = 12, fig.align = "center"}
+ggplot(data=train, aes(x=class, fill=factor(cont_numb)))+
+  geom_bar(position="fill", aes(y = (..count..)/sum(..count..)))+
+  ylab("frequency")+scale_fill_discrete(name="Is higher than median")+
+  xlab("Class")+ylab("proportion")+geom_hline(yintercept=0.5)
+```
+In this case the presence of numbers is more higher in the emails classified as "spam".
+
+&nbsp;
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+train$special_char<-as.numeric(train$special_char)
+train$cont_numb<-as.numeric(train$cont_numb)
+train$keyword_present<-as.numeric(train$keyword_present)
+train$n_digit_in_email<-as.numeric(train$n_digit_in_email)
+train<-train[,-2]
+
+test$special_char<-as.numeric(test$special_char)
+test$cont_numb<-as.numeric(test$cont_numb)
+test$keyword_present<-as.numeric(test$keyword_present)
+test$n_digit_in_email<-as.numeric(test$n_digit_in_email)
+test<- test[,-1]
+```
+
+&nbsp;
+
+## Splitting the Train Set
+
+In order to better improve my model, Idecide to split the Train set in two sets:
+
+• the "train" set, that now contains only the 80% of the originals observations
+
+• the "train_validation" set, that contains the 20% of the originals observations
+
+```{r, warning=FALSE}
+#splitting train
+set.seed(8052023)
+train_idx <- createDataPartition(train$class, times = 1, p = 0.8, list = FALSE)
+train <- train[train_idx, ]
+#train_validation set
+train_validation <- train[-train_idx, ]
+```
+
+
+&nbsp;
+
+## Logistic Regression
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+glm.fits <- glm (class ~ .-special_char+numeric_char_count:cont_numb-numeric_char_count-cont_numb+avg_word_length:letter_count-letter_count+count_special_char:special_char:punct_count+punct_count:count_special_char-punct_count-count_special_char+uppercase_words_count:upper_count-uppercase_words_count, data=train, family = binomial)
+summary(glm.fits)
+```
+&nbsp;
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+##predictive power
+pR2(glm.fits)["McFadden"]
+```
+
+### Measure the variable importance using the function varImp()
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+varImp(glm.fits) #more higher more important
+```
+
+### Measure the multicollinearity using function vif()
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+car::vif(glm.fits) #over than 5 means collinearity
+```
+
+&nbsp;
+
+## Predictions using Train_validation
+
+```{r, echo=FALSE, warning=FALSE}
+#confusion matrix for accuracy
+prediction_glm <- predict(glm.fits , newdata = train_validation, type = "response" )
+class.pred <- ifelse(prediction_glm > 0.5, 1, 0)
+class.pred<-as.factor(class.pred)
+conf_glm<-(table(train_validation$class, class.pred))
+#accuracy
+cat("Accuracy = ",(accuracy_glm<-sum(diag(conf_glm))/sum(conf_glm)))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+confMatrix<-addmargins(conf_glm)
+confMatrix
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+TN <- confMatrix[1,1]
+FP <- confMatrix[1,2]
+FN <- confMatrix[2,1]
+TP <- confMatrix[2,2]
+cat("Specificity = ",(specificity <- TN / (TN + FP)))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+cat("Sensitivity = ", (sensitivity <- TP / (TP + FN)))
+```
+
+## Prediction on the Test Set
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#confusion matrix for accuracy
+prediction_glm_t <- predict(glm.fits , newdata = test, type = "response" )
+class.pred_test <- ifelse(prediction_glm_t > 0.5, 1, 0)
+class.pred_test<-as.factor(class.pred_test)
+```
+
+Now i can show the prediction:
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+options(max.print = 1200)
+class.pred_test<- as.matrix(class.pred_test)
+class.pred_test <- ifelse(class.pred_test == 1, "spam", "ham")
+table(class.pred_test)
+```
+
